@@ -11,6 +11,8 @@ On ne réserve **que le repas** : la soirée qui suit est en accès libre.
   belge générée automatiquement). E-mails de confirmation via **Brevo**.
 - Réservation par téléphone possible pour ceux qui ne paient pas en ligne (numéro
   configurable, affiché sur la page).
+- Onglet **Encoder une résa** dans l'admin pour saisir en quelques secondes une
+  réservation prise par téléphone (la communication structurée s'affiche à dicter).
 - Espace organisateur intégré : réservations, paiements, **fiche cuisine par plat**
   (adulte/enfant × sur place/emporter), éditeur de menu, réglages, exports CSV
   (complet, liste « jour J » sur place, liste à emporter).

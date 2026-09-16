@@ -173,7 +173,7 @@
   .summary .btn.ghost{color:#fff; box-shadow:inset 0 0 0 2px rgba(255,255,255,.55)}
   .summary .btn.ghost:hover{background:rgba(255,255,255,.1)}
   .paybtns{display:flex; flex-direction:column; gap:10px; margin-top:16px}
-  .phone-help{margin:14px 0 0; font-size:.92rem; color:#3E4667; background:var(--cream); border:1px dashed #E2C89A; border-radius:14px; padding:12px 16px}
+  .phone-help{margin:0 0 18px; font-size:.92rem; color:#3E4667; background:var(--cream); border:1px dashed #E2C89A; border-radius:14px; padding:12px 16px}
 
   /* résultat */
   .result{padding:32px; text-align:center}
@@ -368,7 +368,7 @@
             <div class="qhead"><span>Plat</span><span>Adulte</span><span>Enfant</span></div>
             <div class="qty-table" id="qtyTable"><!-- injecté --></div>
           </div>
-
+          <p class="phone-help" id="phoneHelp" style="display:none"></p>
         </div>
 
         <div class="book-side">
@@ -406,7 +406,6 @@
           </div>
           <p class="hint">Par carte : paiement sécurisé (Stripe), réservation confirmée tout de suite.<br>Par virement : tu reçois l'IBAN et une communication structurée par e-mail, confirmée à réception.</p>
         </div>
-        <p class="phone-help" id="phoneHelp" style="display:none"></p>
         </div>
       </div>
     </div>
@@ -473,6 +472,7 @@
 
       <div class="tabs">
         <button class="on" data-tab="resa">Réservations</button>
+        <button data-tab="encoder">＋ Encoder une résa</button>
         <button data-tab="cuisine">Cuisine</button>
         <button data-tab="menu">Menu & prix</button>
         <button data-tab="reglages">Réglages</button>
@@ -506,6 +506,33 @@
             </tr></thead>
             <tbody id="resaBody"></tbody>
           </table>
+        </div>
+      </div>
+
+      <!-- TAB encoder (réservation prise par téléphone) -->
+      <div data-pane="encoder" style="display:none">
+        <p style="color:var(--muted); margin-top:0">Pour une réservation prise par téléphone. La communication structurée s'affiche à la fin : dicte-la à la personne pour son virement (elle la reçoit aussi par e-mail si tu en indiques un).</p>
+        <div id="encArea">
+          <div class="cfg-grid">
+            <div class="field"><label>Nom et prénom *</label><input id="encName" placeholder="Ex. Marie Dupont"></div>
+            <div class="field"><label>Téléphone</label><input id="encPhone" type="tel" placeholder="04xx xx xx xx"></div>
+            <div class="field"><label>E-mail (facultatif, pour l'envoi des infos de paiement)</label><input id="encEmail" type="email"></div>
+            <div class="field"><label>Où ?</label>
+              <select id="encMode"><option value="dine">🍽️ Sur place</option><option value="take">🥡 À emporter</option></select></div>
+          </div>
+          <div class="qhead" style="margin-top:16px"><span>Plat</span><span>Adulte</span><span>Enfant</span></div>
+          <div class="qty-table" id="encQty"></div>
+          <div class="cfg-grid" style="margin-top:14px">
+            <div class="field"><label>Remarque</label><input id="encNotes" placeholder="Allergie, heure de retrait…"></div>
+            <div class="field"><label>Paiement</label>
+              <select id="encPaid"><option value="0">À payer par virement (communication structurée)</option><option value="1">Déjà payé (cash / reçu)</option></select></div>
+          </div>
+          <div style="display:flex; gap:12px; align-items:center; flex-wrap:wrap; margin-top:14px">
+            <b id="encTotal" style="font-family:'Fredoka'; font-size:1.3rem">Total : 0 €</b>
+            <span id="encRem" style="color:var(--muted); font-size:.9rem"></span>
+            <button class="btn" id="encSubmit" style="margin-left:auto">Enregistrer la réservation</button>
+          </div>
+          <div class="err" id="encErr"></div>
         </div>
       </div>
 
@@ -948,6 +975,77 @@ function renderKitchen(){
   document.getElementById("listTake").innerHTML = li("take") || '<li style="color:var(--muted)">Personne pour l\'instant.</li>';
 }
 
+/* ---------- encodage d'une réservation par téléphone ---------- */
+let encCart = {};
+const encTotal = () => Object.values(encCart).reduce((s,q)=>s+q,0);
+function renderEnc(){
+  const box = document.getElementById("encQty"); if(!box) return;
+  const menu = (ADMIN.menu||[]).filter(d=>d.active);
+  const m = document.getElementById("encMode").value;
+  const rem = (ADMIN.remaining||{})[m] ?? 0;
+  const free = Math.max(0, rem - encTotal());
+  box.innerHTML = menu.map(d => `
+    <div class="qrow">
+      <div class="dn"><span class="e">${esc(d.emoji||"🍝")}</span>${esc(d.name)}</div>
+      ${VARIANTS.map(v => { const k=`${d.id}:${v.key}`, q=encCart[k]||0; return `
+      <div class="qcell">
+        <div class="lab"><b>${v.label}</b><span>${euro(d[v.price])}</span></div>
+        <div class="stepper">
+          <button type="button" data-estep="${k}" data-d="-1" ${q<=0?"disabled":""}>–</button>
+          <input data-eqty="${k}" value="${q}" inputmode="numeric">
+          <button type="button" data-estep="${k}" data-d="1" ${free<=0?"disabled":""}>+</button>
+        </div>
+      </div>`; }).join("")}
+    </div>`).join("") || `<p style="color:var(--muted)">Aucun plat actif au menu.</p>`;
+  let total=0;
+  for(const [k,q] of Object.entries(encCart)){ const [id,v]=k.split(":"); const d=menu.find(x=>x.id===+id); if(d) total += q*(v==="child"?d.priceChild:d.priceAdult); }
+  document.getElementById("encTotal").textContent = "Total : " + euro(total);
+  document.getElementById("encRem").textContent = `${MODES[m].label} : ${plural(rem,"place restante","places restantes")}`;
+}
+function setEncQty(key, val){
+  let v = parseInt(val||0,10); if(isNaN(v)||v<0) v=0;
+  const m = document.getElementById("encMode").value;
+  const others = encTotal() - (encCart[key]||0);
+  v = Math.min(v, Math.max(0, ((ADMIN.remaining||{})[m] ?? 0) - others));
+  if(v>0) encCart[key]=v; else delete encCart[key];
+  renderEnc();
+}
+async function encSubmit(){
+  const err = document.getElementById("encErr"); err.textContent="";
+  const name = document.getElementById("encName").value.trim();
+  if(!name){ err.textContent="Le nom est obligatoire."; return; }
+  if(encTotal()<=0){ err.textContent="Choisis au moins un plat."; return; }
+  const items = Object.entries(encCart).map(([k,q])=>{ const [id,v]=k.split(":"); return {dish:+id, variant:v, qty:q}; });
+  const body = { name, phone:document.getElementById("encPhone").value.trim(), email:document.getElementById("encEmail").value.trim(),
+    mode:document.getElementById("encMode").value, notes:document.getElementById("encNotes").value.trim(),
+    paid:document.getElementById("encPaid").value==="1", items };
+  const btn = document.getElementById("encSubmit"); btn.disabled=true;
+  const { data, status } = await api("admin_book", { method:"POST", body });
+  btn.disabled=false;
+  if(status===409){ err.textContent="Plus assez de places pour ce mode."; await loadAdmin(); renderEnc(); return; }
+  if(!data.ok){ err.textContent="Erreur : " + (data.error||"réessaie."); return; }
+  const b = data.booking;
+  document.getElementById("encArea").innerHTML = `
+    <div class="card result" style="box-shadow:none">
+      <div class="check">✓</div>
+      <h3>Réservation enregistrée</h3>
+      <p style="color:var(--muted); margin:6px 0 0"><b>${esc(b.name)}</b> · ${MODES[b.mode].label} · ${b.meals} repas · ${b.status==="paid"?"payée":"à payer"}</p>
+      ${itemsHtml(b)}
+      ${b.status!=="paid" ? `<div class="pay-box">
+        <span class="l" style="margin-top:0">Montant</span><p class="v" style="font-size:1.5rem">${euroC(b.amount)}</p>
+        <span class="l">Communication structurée à dicter</span><p class="v" style="font-size:1.4rem">${esc(b.ref)} <button class="copybtn" data-copy="${esc(b.ref)}">copier</button></p>
+        <span class="l">IBAN</span><p class="v">${esc(CFG.iban)}</p>
+      </div>` : `<p style="margin-top:14px">Montant : <b>${euroC(b.amount)}</b> · Réf ${esc(b.ref)}</p>`}
+      <button class="btn" id="encAgain" style="margin-top:12px">＋ Encoder une autre réservation</button>
+    </div>`;
+  await loadAdmin(); loadState();
+}
+const ENC_FORM_HTML = document.getElementById("encArea").innerHTML;
+function resetEnc(){
+  document.getElementById("encArea").innerHTML = ENC_FORM_HTML; encCart = {}; renderEnc();
+  document.getElementById("encName").focus();
+}
+
 /* ---------- éditeur de menu ---------- */
 function renderMenuEditor(){
   const box = document.getElementById("menuEditor"); if(!box) return;
@@ -1061,13 +1159,18 @@ document.addEventListener("click", (e)=>{
     document.querySelectorAll(".tabs button").forEach(b=>b.classList.toggle("on", b.dataset.tab===activeTab));
     document.querySelectorAll("[data-pane]").forEach(p=>p.style.display = p.dataset.pane===activeTab?"block":"none");
     if(activeTab==="reglages") fillCfgForm();
+    if(activeTab==="encoder"){ renderEnc(); const n=document.getElementById("encName"); if(n) n.focus(); }
   }
+  if(t.dataset.estep){ const k=t.dataset.estep; setEncQty(k, (encCart[k]||0)+parseInt(t.dataset.d,10)); }
+  if(t.id==="encSubmit") encSubmit();
+  if(t.id==="encAgain") resetEnc();
   if(t.dataset.mv){ const i=+t.dataset.i, j=i+parseInt(t.dataset.mv,10); if(j>=0&&j<EDIT_MENU.length){ [EDIT_MENU[i],EDIT_MENU[j]]=[EDIT_MENU[j],EDIT_MENU[i]]; renderMenuEditor(); } }
   if(t.dataset.del!==undefined){ const d=EDIT_MENU[+t.dataset.del]; if(!d.name || confirm(`Supprimer « ${d.name} » du menu ?`)){ EDIT_MENU.splice(+t.dataset.del,1); renderMenuEditor(); } }
 });
 document.addEventListener("change", e=>{
   const t=e.target;
   if(t.name==="mode") setMode(t.value);
+  if(t.id==="encMode"){ encCart={}; renderEnc(); }
   if(t.dataset.m){ const d=EDIT_MENU[+t.dataset.i]; if(!d) return;
     if(t.type==="checkbox") d[t.dataset.m]=t.checked; else if(t.type==="number") d[t.dataset.m]=parseFloat(t.value)||0; else d[t.dataset.m]=t.value;
     if(t.type==="checkbox") renderMenuEditor(); }
@@ -1075,6 +1178,7 @@ document.addEventListener("change", e=>{
 document.addEventListener("input", e=>{
   const t=e.target;
   if(t.dataset.qty) setQty(t.dataset.qty, t.value);
+  if(t.dataset.eqty) setEncQty(t.dataset.eqty, t.value);
   if(t.dataset.m && t.type!=="checkbox"){ const d=EDIT_MENU[+t.dataset.i]; if(d) d[t.dataset.m] = t.type==="number" ? (parseFloat(t.value)||0) : t.value; }
 });
 document.getElementById("payCard").addEventListener("click", ()=>book("stripe"));
