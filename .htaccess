@@ -1,0 +1,4 @@
+# Bloque l'accès web direct aux fichiers sensibles
+<FilesMatch "^(config\.php|config\.example\.php|lib\.php|schema\.sql|migrate_v2\.sql|README\.md|\.gitignore)$">
+  Require all denied
+</FilesMatch>

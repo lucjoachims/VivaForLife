@@ -1,11 +1,16 @@
-# Le Grand Repas — site de réservation (PHP / MySQL / Stripe / Brevo)
+# À table pour Viva for Life — site de réservation (PHP / MySQL / Stripe / Brevo)
 
-Site d'une page pour réserver et **payer à l'avance** un repas caritatif + soirée DJ.
-Trois formules : **Repas + Soirée**, **Soirée seule**, **Repas à emporter**, avec des
-capacités croisées (la cuisine, la salle et la soirée ont chacune leur plafond).
-Paiement par **carte (Stripe Checkout)** ou par **virement** (communication structurée
-belge générée automatiquement). E-mails de confirmation via **Brevo**. Espace
-organisateur intégré (réservations, paiements, listes de cuisine, réglages, export CSV).
+Site d'une page pour réserver et **payer à l'avance** son repas lors d'une soirée caritative.
+On ne réserve **que le repas** : la soirée qui suit est en accès libre.
+
+- **Menu configurable** depuis l'admin : plats (par défaut pâtes bolognaise, 4 fromages,
+  carbonara), chacun en version **adulte** et **enfant** avec son propre prix.
+- Apéritif et dessert inclus pour tous (texte configurable).
+- Deux capacités indépendantes : **places sur place** et **repas à emporter**.
+- Paiement par **carte (Stripe Checkout)** ou par **virement** (communication structurée
+  belge générée automatiquement). E-mails de confirmation via **Brevo**.
+- Espace organisateur intégré : réservations, paiements, **fiche cuisine par plat**
+  (adulte/enfant × sur place/emporter), éditeur de menu, réglages, export CSV.
 
 ---
 
@@ -17,7 +22,8 @@ organisateur intégré (réservations, paiements, listes de cuisine, réglages, 
 | `api.php` | API JSON (réservations, état, admin) |
 | `lib.php` | Cœur : base de données, capacités, e-mails Brevo, Stripe |
 | `stripe_webhook.php` | Reçoit les paiements Stripe (confirme / libère les places) |
-| `schema.sql` | Tables MySQL à créer une fois |
+| `schema.sql` | Tables MySQL à créer une fois (installation neuve) |
+| `migrate_v2.sql` | Migration si tu as déjà l'ancienne version « 3 formules » |
 | `config.example.php` | Modèle de configuration → **à copier en `config.php`** |
 | `.htaccess` | Bloque l'accès web direct aux fichiers sensibles |
 
@@ -31,7 +37,11 @@ Crée une base MySQL (ou utilise une existante), puis importe `schema.sql`
 ```
 mysql -u TON_USER -p TA_BASE < schema.sql
 ```
-Ça crée les tables `settings` et `bookings` et insère les réglages par défaut.
+Ça crée les tables `settings`, `dishes`, `bookings` et `booking_items`, et insère les
+réglages et les trois plats par défaut.
+
+**Déjà l'ancienne version en ligne ?** N'importe pas `schema.sql` : lance **une seule fois**
+`migrate_v2.sql` à la place. Les anciennes réservations sont conservées.
 
 ### 2. Configuration
 Copie `config.example.php` en **`config.php`** et remplis :
@@ -65,18 +75,19 @@ Dans Stripe → *Développeurs → Webhooks → + Ajouter un endpoint* :
 
 ---
 
-## Le modèle de capacités
+## Le modèle : plats, variantes, capacités
 
-Trois plafonds réglables (onglet *Réglages* de l'admin) :
+- Une réservation est soit **sur place**, soit **à emporter** (une personne qui veut
+  les deux fait deux réservations).
+- Elle contient un ou plusieurs **plats**, chacun en version **adulte** ou **enfant**.
+  Le nom et le prix sont copiés dans la réservation : modifier le menu ensuite ne
+  change pas les réservations existantes.
+- Deux plafonds réglables (onglet *Réglages*) : **places sur place** (`capDine`) et
+  **repas à emporter** (`capTake`). Un plafond = un nombre de repas.
 
-- **Places à table** (`capDine`) — la salle pour le repas assis.
-- **Total repas cuisinés** (`capKitchen`) — repas à table **+** à emporter réunis,
-  pour ne pas surcharger le cuisinier.
-- **Capacité soirée** (`capParty`) — convives du repas **+** « soirée seule ».
-
-Les contraintes sont vérifiées **côté serveur**, dans une transaction avec verrou,
-donc impossible de vendre plus de places que disponible même en cas de clics
-simultanés.
+Les contraintes et les montants sont vérifiés **côté serveur**, dans une transaction
+avec verrou, donc impossible de vendre plus de places que disponible même en cas de
+clics simultanés.
 
 ---
 
@@ -102,6 +113,8 @@ annuler depuis l'admin les virements jamais reçus pour libérer les places.
 - Recommandé : servir le site en **HTTPS** (obligatoire pour Stripe en production).
 
 ## Personnalisation rapide
-Tout (nom, cause, dates, lieu, prix, capacités, IBAN, objectif) se modifie depuis
-l'onglet *Réglages* de l'espace organisateur — pas besoin de toucher au code.
-Les libellés/descriptions des trois formules sont dans `index.php` (tableau `FORMULAS`).
+Tout se modifie depuis l'espace organisateur, sans toucher au code :
+- Onglet **Menu & prix** : ajouter / renommer / réordonner / désactiver des plats,
+  prix adulte et enfant.
+- Onglet **Réglages** : nom, cause, date, heure, lieu, capacités, texte « inclus pour
+  tous », info de retrait à emporter, texte « et après le repas », IBAN, objectif.
