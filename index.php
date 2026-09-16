@@ -379,19 +379,15 @@
               <label for="fName">Nom et prénom</label>
               <input id="fName" type="text" placeholder="Ex. Marie Dupont" autocomplete="name">
             </div>
-            <div class="two">
-              <div class="field">
+            <div class="two" style="margin-bottom:0">
+              <div class="field" style="margin-bottom:0">
                 <label for="fEmail">E-mail</label>
                 <input id="fEmail" type="email" placeholder="toi@mail.be" autocomplete="email">
               </div>
-              <div class="field">
+              <div class="field" style="margin-bottom:0">
                 <label for="fPhone">Téléphone</label>
                 <input id="fPhone" type="tel" placeholder="04xx xx xx xx" autocomplete="tel">
               </div>
-            </div>
-            <div class="field" style="margin-bottom:0">
-              <label for="fNotes">Une remarque ? (allergie, heure de retrait, table avec des amis…)</label>
-              <textarea id="fNotes" rows="2" placeholder="Facultatif"></textarea>
             </div>
             <div class="err" id="formErr"></div>
           </div>
@@ -748,7 +744,7 @@ async function book(method){
   const name = document.getElementById("fName").value.trim();
   const email= document.getElementById("fEmail").value.trim();
   const phone= document.getElementById("fPhone").value.trim();
-  const notes= document.getElementById("fNotes").value.trim();
+  const notes= "";
   const err  = document.getElementById("formErr"); err.textContent="";
 
   if(cartTotal()<=0){ err.textContent="Choisis au moins un plat (étape 2)."; return; }
