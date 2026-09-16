@@ -9,8 +9,11 @@ On ne réserve **que le repas** : la soirée qui suit est en accès libre.
 - Deux capacités indépendantes : **places sur place** et **repas à emporter**.
 - Paiement par **carte (Stripe Checkout)** ou par **virement** (communication structurée
   belge générée automatiquement). E-mails de confirmation via **Brevo**.
+- Réservation par téléphone possible pour ceux qui ne paient pas en ligne (numéro
+  configurable, affiché sur la page).
 - Espace organisateur intégré : réservations, paiements, **fiche cuisine par plat**
-  (adulte/enfant × sur place/emporter), éditeur de menu, réglages, export CSV.
+  (adulte/enfant × sur place/emporter), éditeur de menu, réglages, exports CSV
+  (complet, liste « jour J » sur place, liste à emporter).
 
 ---
 
@@ -117,4 +120,5 @@ Tout se modifie depuis l'espace organisateur, sans toucher au code :
 - Onglet **Menu & prix** : ajouter / renommer / réordonner / désactiver des plats,
   prix adulte et enfant.
 - Onglet **Réglages** : nom, cause, date, heure, lieu, capacités, texte « inclus pour
-  tous », info de retrait à emporter, texte « et après le repas », IBAN, objectif.
+  tous », info de retrait à emporter, téléphone pour réserver sans paiement en ligne,
+  texte « et après le repas », IBAN, objectif.

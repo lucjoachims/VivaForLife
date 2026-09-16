@@ -23,6 +23,7 @@ function public_config(): array {
     'includedText' => setting('includedText', ''),
     'takeText'     => setting('takeText', ''),
     'afterText'    => setting('afterText', ''),
+    'helpPhone'    => setting('helpPhone', ''),
     'iban'         => setting('iban'),
     'accountName'  => setting('accountName'),
   ];
@@ -157,12 +158,25 @@ try {
       json_out(['ok' => true]);
     }
 
+    /* ---------- ADMIN : supprimer définitivement une résa annulée ---------- */
+    case 'admin_delete': {
+      require_admin();
+      $in = input_json();
+      $id = (int)($in['id'] ?? 0);
+      $b = get_booking($id);
+      if (!$b) json_out(['error' => 'notfound'], 404);
+      if ($b['status'] !== 'cancelled') json_out(['error' => 'not_cancelled'], 409);
+      db()->prepare('DELETE FROM booking_items WHERE booking_id = ?')->execute([$id]);
+      db()->prepare('DELETE FROM bookings WHERE id = ?')->execute([$id]);
+      json_out(['ok' => true]);
+    }
+
     /* ---------- ADMIN : enregistrer les réglages ---------- */
     case 'admin_config': {
       require_admin();
       $in = input_json();
       $allowed = ['eventName','cause','date','time','place','goal',
-                  'capDine','capTake','includedText','takeText','afterText',
+                  'capDine','capTake','includedText','takeText','afterText','helpPhone',
                   'iban','accountName'];
       $kv = [];
       foreach ($allowed as $k) if (array_key_exists($k, $in)) $kv[$k] = $in[$k];
