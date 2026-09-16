@@ -158,6 +158,30 @@ try {
       json_out(['ok' => true]);
     }
 
+    /* ---------- ADMIN : encoder une réservation prise par téléphone ---------- */
+    case 'admin_book': {
+      require_admin();
+      $in = input_json();
+      $name  = trim($in['name'] ?? '');
+      $email = trim($in['email'] ?? '');
+      $phone = trim($in['phone'] ?? '');
+      $mode  = ($in['mode'] ?? 'dine') === 'take' ? 'take' : 'dine';
+      $items = is_array($in['items'] ?? null) ? $in['items'] : [];
+      $paid  = !empty($in['paid']);
+      if ($name === '') json_out(['error' => 'name'], 422);
+      if (!$items)      json_out(['error' => 'empty'], 422);
+
+      $b = create_booking([
+        'name' => $name, 'email' => $email, 'phone' => $phone,
+        'notes' => $in['notes'] ?? '', 'mode' => $mode, 'items' => $items, 'method' => 'transfer',
+      ]);
+      if (isset($b['error'])) json_out($b, $b['error'] === 'empty' ? 422 : 409);
+
+      if ($paid) { mark_paid((int)$b['id']); $b = get_booking((int)$b['id']); }   // + e-mail de confirmation si e-mail
+      elseif ($email !== '') email_payment_info($b);                              // e-mail avec IBAN + communication
+      json_out(['ok' => true, 'booking' => booking_public($b)]);
+    }
+
     /* ---------- ADMIN : supprimer définitivement une résa annulée ---------- */
     case 'admin_delete': {
       require_admin();
