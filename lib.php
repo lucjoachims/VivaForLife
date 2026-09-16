@@ -43,20 +43,73 @@ function settings_save(array $kv): void {
   foreach ($kv as $k => $v) $stmt->execute([$k, (string)$v]);
 }
 
+
 /* ---------- Helpers ---------- */
 function caps(): array {
   return [
-    'capDine'    => (int) setting('capDine', 50),
-    'capKitchen' => (int) setting('capKitchen', 60),
-    'capParty'   => (int) setting('capParty', 90),
+    'capDine' => (int) setting('capDine', 80),   // repas servis sur place
+    'capTake' => (int) setting('capTake', 40),   // repas à emporter
   ];
 }
-function prices_cents(): array {
+function to_cents($v): int { return (int) round(((float) $v) * 100); }
+
+/* ---------- Menu (plats configurables depuis l'admin) ---------- */
+function dish_public(array $r): array {
   return [
-    'dine'  => (int) round(((float) setting('priceDine', 25)) * 100),
-    'party' => (int) round(((float) setting('priceParty', 10)) * 100),
-    'take'  => (int) round(((float) setting('priceTake', 15)) * 100),
+    'id'          => (int) $r['id'],
+    'name'        => $r['name'],
+    'description' => $r['description'] ?? '',
+    'emoji'       => $r['emoji'] ?? '',
+    'priceAdult'  => (float) $r['price_adult'],
+    'priceChild'  => (float) $r['price_child'],
+    'active'      => (int) $r['active'] === 1,
   ];
+}
+function menu_all(bool $onlyActive = false): array {
+  $sql = 'SELECT * FROM dishes' . ($onlyActive ? ' WHERE active = 1' : '') . ' ORDER BY sort_order, id';
+  $out = [];
+  foreach (db()->query($sql) as $r) $out[] = dish_public($r);
+  return $out;
+}
+/* Remplace le menu complet : ids présents = mis à jour, sans id = créés,
+   ids absents = supprimés. Les réservations gardent leur copie du nom
+   et du prix, donc modifier le menu ne touche pas l'historique. */
+function menu_save(array $dishes): void {
+  $pdo = db();
+  $pdo->beginTransaction();
+  try {
+    $keep = [];
+    $upd = $pdo->prepare('UPDATE dishes SET name=?, description=?, emoji=?, price_adult=?, price_child=?, active=?, sort_order=? WHERE id=?');
+    $ins = $pdo->prepare('INSERT INTO dishes (name, description, emoji, price_adult, price_child, active, sort_order) VALUES (?,?,?,?,?,?,?)');
+    $i = 0;
+    foreach ($dishes as $d) {
+      if (!is_array($d)) continue;
+      $name = mb_substr(trim((string)($d['name'] ?? '')), 0, 120);
+      if ($name === '') continue;
+      $row = [
+        $name,
+        mb_substr(trim((string)($d['description'] ?? '')), 0, 255),
+        mb_substr(trim((string)($d['emoji'] ?? '')), 0, 16),
+        max(0, round((float)($d['priceAdult'] ?? 0), 2)),
+        max(0, round((float)($d['priceChild'] ?? 0), 2)),
+        !empty($d['active']) ? 1 : 0,
+        ++$i,
+      ];
+      $id = (int)($d['id'] ?? 0);
+      if ($id > 0) { $upd->execute(array_merge($row, [$id])); $keep[] = $id; }
+      else         { $ins->execute($row); $keep[] = (int)$pdo->lastInsertId(); }
+    }
+    if ($keep) {
+      $ph = implode(',', array_fill(0, count($keep), '?'));
+      $pdo->prepare("DELETE FROM dishes WHERE id NOT IN ($ph)")->execute($keep);
+    } else {
+      $pdo->exec('DELETE FROM dishes');
+    }
+    $pdo->commit();
+  } catch (Throwable $e) {
+    if ($pdo->inTransaction()) $pdo->rollBack();
+    throw $e;
+  }
 }
 function money_cents(int $c): string {
   return number_format($c / 100, 2, ',', ' ') . ' €';
@@ -73,27 +126,22 @@ function input_json(): array {
   return is_array($d) ? $d : [];
 }
 
+
 /* ---------- Comptage / disponibilités ---------- */
 function counts(PDO $pdo, bool $lock = false): array {
-  $sql = "SELECT
-            COALESCE(SUM(qty_dine),0)  AS d,
-            COALESCE(SUM(qty_party),0) AS p,
-            COALESCE(SUM(qty_take),0)  AS t
+  $sql = "SELECT COALESCE(SUM(qty_dine),0) AS d, COALESCE(SUM(qty_take),0) AS t
           FROM bookings WHERE status <> 'cancelled'";
   if ($lock) $sql .= ' FOR UPDATE';
   $r = $pdo->query($sql)->fetch();
-  $d = (int)$r['d']; $p = (int)$r['p']; $t = (int)$r['t'];
-  return ['d' => $d, 'p' => $p, 't' => $t, 'meals' => $d + $t];
+  return ['dine' => (int)$r['d'], 'take' => (int)$r['t']];
 }
 function remaining(?array $c = null): array {
   $c = $c ?? counts(db());
   $k = caps();
-  $remDine  = max(0, min($k['capDine'] - $c['d'],
-                         $k['capKitchen'] - $c['meals'],
-                         $k['capParty'] - ($c['d'] + $c['p'])));
-  $remTake  = max(0, $k['capKitchen'] - $c['meals']);
-  $remParty = max(0, $k['capParty'] - ($c['d'] + $c['p']));
-  return ['dine' => $remDine, 'party' => $remParty, 'take' => $remTake];
+  return [
+    'dine' => max(0, $k['capDine'] - $c['dine']),
+    'take' => max(0, $k['capTake'] - $c['take']),
+  ];
 }
 function raised(PDO $pdo): array {
   $r = $pdo->query("SELECT COALESCE(SUM(amount_cents),0) c, COUNT(*) n
@@ -125,36 +173,64 @@ function gen_ref(PDO $pdo): string {
 
 /* ============================================================
    CRÉATION D'UNE RÉSERVATION (transaction + verrou anti-survente)
-   $data: name,email,phone,notes, qd,qp,qt, method
-   Retourne le booking, ou ['error'=>'sold','remaining'=>...]
+   $data: name, email, phone, notes, method,
+          mode  : 'dine' (sur place) | 'take' (à emporter)
+          items : [ ['dish'=>id, 'variant'=>'adult'|'child', 'qty'=>n], … ]
+   Retourne le booking, ['error'=>'sold','remaining'=>…] ou ['error'=>'empty']
    ============================================================ */
+function normalize_items(array $items): array {
+  // Regroupe par (plat, variante), ne garde que les plats actifs,
+  // et fige le nom + le prix du moment (jamais ceux envoyés par le navigateur).
+  $menu = [];
+  foreach (menu_all(true) as $d) $menu[$d['id']] = $d;
+  $agg = [];
+  foreach ($items as $it) {
+    if (!is_array($it)) continue;
+    $id  = (int)($it['dish'] ?? 0);
+    $var = ($it['variant'] ?? 'adult') === 'child' ? 'child' : 'adult';
+    $qty = max(0, min(200, (int)($it['qty'] ?? 0)));
+    if ($qty <= 0 || !isset($menu[$id])) continue;
+    $key = $id . ':' . $var;
+    if (!isset($agg[$key])) {
+      $agg[$key] = [
+        'dish_id'    => $id,
+        'dish_name'  => $menu[$id]['name'],
+        'variant'    => $var,
+        'qty'        => 0,
+        'unit_cents' => to_cents($var === 'child' ? $menu[$id]['priceChild'] : $menu[$id]['priceAdult']),
+      ];
+    }
+    $agg[$key]['qty'] += $qty;
+  }
+  return array_values($agg);
+}
+
 function create_booking(array $data) {
-  $pdo = db();
-  $qd = max(0, (int)($data['qd'] ?? 0));
-  $qp = max(0, (int)($data['qp'] ?? 0));
-  $qt = max(0, (int)($data['qt'] ?? 0));
+  $pdo    = db();
+  $mode   = ($data['mode'] ?? 'dine') === 'take' ? 'take' : 'dine';
   $method = ($data['method'] ?? 'transfer') === 'stripe' ? 'stripe' : 'transfer';
+  $items  = normalize_items($data['items'] ?? []);
+  $total  = array_sum(array_column($items, 'qty'));
+  if ($total <= 0) return ['error' => 'empty'];
 
   $pdo->beginTransaction();
   try {
     $c = counts($pdo, true);                 // verrou
     $k = caps();
-    $okDine  = $qd <= ($k['capDine'] - $c['d']);
-    $okMeals = ($qd + $qt) <= ($k['capKitchen'] - $c['meals']);
-    $okParty = ($qd + $qp) <= ($k['capParty'] - ($c['d'] + $c['p']));
-    if (!$okDine || !$okMeals || !$okParty) {
+    $free = $mode === 'take' ? $k['capTake'] - $c['take'] : $k['capDine'] - $c['dine'];
+    if ($total > $free) {
       $pdo->rollBack();
       return ['error' => 'sold', 'remaining' => remaining($c)];
     }
 
-    $pc = prices_cents();
-    $amount = $qd * $pc['dine'] + $qp * $pc['party'] + $qt * $pc['take'];
+    $amount = 0;
+    foreach ($items as $it) $amount += $it['qty'] * $it['unit_cents'];
     $ref = gen_ref($pdo);
 
     $stmt = $pdo->prepare(
-      'INSERT INTO bookings
-        (ref,name,email,phone,notes,qty_dine,qty_party,qty_take,amount_cents,status,method)
-       VALUES (?,?,?,?,?,?,?,?,?,\'pending\',?)'
+      "INSERT INTO bookings
+        (ref,name,email,phone,notes,mode,qty_dine,qty_take,amount_cents,status,method)
+       VALUES (?,?,?,?,?,?,?,?,?,'pending',?)"
     );
     $stmt->execute([
       $ref,
@@ -162,9 +238,16 @@ function create_booking(array $data) {
       mb_substr(trim($data['email'] ?? ''), 0, 190) ?: null,
       mb_substr(trim($data['phone'] ?? ''), 0, 40) ?: null,
       mb_substr(trim($data['notes'] ?? ''), 0, 1000) ?: null,
-      $qd, $qp, $qt, $amount, $method,
+      $mode,
+      $mode === 'dine' ? $total : 0,
+      $mode === 'take' ? $total : 0,
+      $amount, $method,
     ]);
     $id = (int)$pdo->lastInsertId();
+    $ins = $pdo->prepare('INSERT INTO booking_items (booking_id, dish_id, dish_name, variant, qty, unit_cents) VALUES (?,?,?,?,?,?)');
+    foreach ($items as $it) {
+      $ins->execute([$id, $it['dish_id'], $it['dish_name'], $it['variant'], $it['qty'], $it['unit_cents']]);
+    }
     $pdo->commit();
   } catch (Throwable $e) {
     if ($pdo->inTransaction()) $pdo->rollBack();
@@ -173,18 +256,39 @@ function create_booking(array $data) {
   return get_booking($id);
 }
 
+/* Détail des plats de plusieurs réservations : [booking_id => items[]] */
+function booking_items_map(array $ids): array {
+  if (!$ids) return [];
+  $ph = implode(',', array_fill(0, count($ids), '?'));
+  $s = db()->prepare("SELECT * FROM booking_items WHERE booking_id IN ($ph) ORDER BY id");
+  $s->execute(array_values($ids));
+  $map = [];
+  foreach ($s->fetchAll() as $r) {
+    $map[(int)$r['booking_id']][] = [
+      'dish'    => $r['dish_id'] !== null ? (int)$r['dish_id'] : null,
+      'name'    => $r['dish_name'],
+      'variant' => $r['variant'],
+      'qty'     => (int)$r['qty'],
+      'unit'    => (int)$r['unit_cents'],
+    ];
+  }
+  return $map;
+}
 function get_booking(int $id): ?array {
   $s = db()->prepare('SELECT * FROM bookings WHERE id = ?');
   $s->execute([$id]);
   $b = $s->fetch();
-  return $b ?: null;
+  if (!$b) return null;
+  $b['items'] = booking_items_map([(int)$b['id']])[(int)$b['id']] ?? [];
+  return $b;
 }
 function get_booking_by_ref(string $ref): ?array {
-  $s = db()->prepare('SELECT * FROM bookings WHERE ref = ?');
+  $s = db()->prepare('SELECT id FROM bookings WHERE ref = ?');
   $s->execute([$ref]);
-  $b = $s->fetch();
-  return $b ?: null;
+  $r = $s->fetch();
+  return $r ? get_booking((int)$r['id']) : null;
 }
+
 
 /* ============================================================
    E-MAIL — aiguilleur : SMTP si configuré, sinon API Brevo
@@ -296,24 +400,45 @@ function smtp_send(string $toEmail, string $toName, string $subject, string $htm
   return $ok;
 }
 
+
+/* ---------- Contenu des e-mails ---------- */
 function email_layout(string $title, string $body): string {
-  $name = htmlspecialchars(setting('eventName', 'Le Grand Repas'));
-  return '<div style="font-family:Arial,Helvetica,sans-serif;max-width:560px;margin:auto;color:#1A1226">
-    <div style="background:#2B1A3D;color:#FBF3E4;padding:22px 24px;border-radius:14px 14px 0 0">
-      <div style="font-size:13px;letter-spacing:.12em;text-transform:uppercase;color:#8E7FA6">' . $name . '</div>
+  $name = htmlspecialchars(setting('eventName', 'À table pour Viva for Life'));
+  return '<div style="font-family:Arial,Helvetica,sans-serif;max-width:560px;margin:auto;color:#1E2A5A">
+    <div style="background:#1E2A5A;color:#FFF7EC;padding:22px 24px;border-radius:14px 14px 0 0">
+      <div style="font-size:13px;letter-spacing:.12em;text-transform:uppercase;color:#F7B733">' . $name . '</div>
       <h1 style="margin:6px 0 0;font-size:22px">' . $title . '</h1>
     </div>
-    <div style="border:1px solid #eadfcf;border-top:none;border-radius:0 0 14px 14px;padding:24px;background:#FBF3E4">'
+    <div style="border:1px solid #F1E3CB;border-top:none;border-radius:0 0 14px 14px;padding:24px;background:#FFF7EC">'
     . $body .
-    '<p style="margin-top:22px;font-size:13px;color:#8a7d63">Merci pour ton soutien 💛</p></div></div>';
+    '<p style="margin-top:22px;font-size:13px;color:#7A6E55">Merci pour ton soutien 🧡</p></div></div>';
 }
 
+function mode_label(string $mode): string { return $mode === 'take' ? 'À emporter' : 'Sur place'; }
+function variant_label(string $v): string { return $v === 'child' ? 'enfant' : 'adulte'; }
+
+/* Résumé texte : "Sur place — 2 × Pâtes bolognaise (adulte) · 1 × Carbonara (enfant)" */
 function lines_text(array $b): string {
   $L = [];
-  if ($b['qty_dine'] > 0)  $L[] = $b['qty_dine'] . ' × Repas + Soirée DJ';
-  if ($b['qty_party'] > 0) $L[] = $b['qty_party'] . ' × Soirée DJ seule';
-  if ($b['qty_take'] > 0)  $L[] = $b['qty_take'] . ' × Repas à emporter';
-  return implode(' · ', $L);
+  foreach ($b['items'] ?? [] as $it) {
+    $L[] = $it['qty'] . ' × ' . $it['name'] . ' (' . variant_label($it['variant']) . ')';
+  }
+  return mode_label($b['mode'] ?? 'dine') . ($L ? ' — ' . implode(' · ', $L) : '');
+}
+/* Résumé HTML pour les e-mails */
+function lines_html(array $b): string {
+  $rows = '';
+  foreach ($b['items'] ?? [] as $it) {
+    $rows .= '<tr><td style="padding:5px 0;border-bottom:1px solid #F1E3CB">' . htmlspecialchars($it['qty'] . ' × ' . $it['name'])
+           . ' <span style="color:#7A6E55">(' . variant_label($it['variant']) . ')</span></td>'
+           . '<td style="padding:5px 0;border-bottom:1px solid #F1E3CB;text-align:right">' . money_cents($it['qty'] * $it['unit']) . '</td></tr>';
+  }
+  $take = ($b['mode'] ?? 'dine') === 'take';
+  $html = '<p style="margin:0 0 6px"><b>' . ($take ? '🥡 À emporter' : '🍽️ Sur place') . '</b>';
+  if ($take && setting('takeText')) $html .= '<br><span style="font-size:13px;color:#7A6E55">' . htmlspecialchars(setting('takeText')) . '</span>';
+  $html .= '</p><table style="width:100%;border-collapse:collapse">' . $rows . '</table>';
+  if (setting('includedText')) $html .= '<p style="font-size:13px;color:#7A6E55;margin:6px 0 0">' . htmlspecialchars(setting('includedText')) . '</p>';
+  return $html;
 }
 
 function email_payment_info(array $b): bool {
@@ -322,32 +447,34 @@ function email_payment_info(array $b): bool {
   $acc  = htmlspecialchars(setting('accountName'));
   $body = '<p>Bonjour ' . htmlspecialchars($b['name']) . ',</p>
     <p>Ta réservation est enregistrée 🎉 — il ne reste qu\'à régler par virement pour la confirmer.</p>
-    <p style="margin:4px 0"><b>' . htmlspecialchars(lines_text($b)) . '</b></p>
-    <table style="width:100%;border-collapse:collapse;margin:18px 0;background:#2B1A3D;color:#FBF3E4;border-radius:10px">
-      <tr><td style="padding:12px 14px 4px;font-size:12px;color:#8E7FA6">MONTANT</td></tr>
+    ' . lines_html($b) . '
+    <table style="width:100%;border-collapse:collapse;margin:18px 0;background:#1E2A5A;color:#FFF7EC;border-radius:10px">
+      <tr><td style="padding:12px 14px 4px;font-size:12px;color:#F7B733">MONTANT</td></tr>
       <tr><td style="padding:0 14px 12px;font-size:22px;font-weight:bold">' . money_cents((int)$b['amount_cents']) . '</td></tr>
-      <tr><td style="padding:0 14px 4px;font-size:12px;color:#8E7FA6">IBAN</td></tr>
+      <tr><td style="padding:0 14px 4px;font-size:12px;color:#F7B733">IBAN</td></tr>
       <tr><td style="padding:0 14px 12px;font-family:monospace;font-size:16px">' . $iban . '</td></tr>
-      <tr><td style="padding:0 14px 4px;font-size:12px;color:#8E7FA6">COMMUNICATION STRUCTURÉE</td></tr>
+      <tr><td style="padding:0 14px 4px;font-size:12px;color:#F7B733">COMMUNICATION STRUCTURÉE</td></tr>
       <tr><td style="padding:0 14px 12px;font-family:monospace;font-size:16px">' . htmlspecialchars($b['ref']) . '</td></tr>
       <tr><td style="padding:0 14px 14px;font-size:13px">Bénéficiaire : ' . $acc . '</td></tr>
     </table>
-    <p style="font-size:14px">Indique bien <b>cette communication structurée</b> dans ton virement : ta place est confirmée dès réception.</p>';
+    <p style="font-size:14px">Indique bien <b>cette communication structurée</b> dans ton virement : ta réservation est confirmée dès réception.</p>';
   return brevo_send($b['email'], $b['name'], 'Tes infos de paiement — ' . setting('eventName'), email_layout('À régler par virement', $body));
 }
 
 function email_confirmation(array $b): bool {
   if (empty($b['email'])) return false;
+  $after = setting('afterText') ? '<p style="font-size:14px">' . htmlspecialchars(setting('afterText')) . '</p>' : '';
   $body = '<p>Bonjour ' . htmlspecialchars($b['name']) . ',</p>
-    <p>Paiement bien reçu — ta place est <b>confirmée</b> ✅. On a hâte de te voir !</p>
-    <p style="margin:4px 0"><b>' . htmlspecialchars(lines_text($b)) . '</b></p>
+    <p>Paiement bien reçu — ta réservation est <b>confirmée</b> ✅. On a hâte de te voir !</p>
+    ' . lines_html($b) . '
     <table style="width:100%;border-collapse:collapse;margin:16px 0">
-      <tr><td style="padding:6px 0;border-bottom:1px solid #e3d6bf">Date</td><td style="padding:6px 0;border-bottom:1px solid #e3d6bf;text-align:right"><b>' . htmlspecialchars(setting('date')) . '</b></td></tr>
-      <tr><td style="padding:6px 0;border-bottom:1px solid #e3d6bf">Heure</td><td style="padding:6px 0;border-bottom:1px solid #e3d6bf;text-align:right"><b>' . htmlspecialchars(setting('time')) . '</b></td></tr>
+      <tr><td style="padding:6px 0;border-bottom:1px solid #F1E3CB">Date</td><td style="padding:6px 0;border-bottom:1px solid #F1E3CB;text-align:right"><b>' . htmlspecialchars(setting('date')) . '</b></td></tr>
+      <tr><td style="padding:6px 0;border-bottom:1px solid #F1E3CB">Heure</td><td style="padding:6px 0;border-bottom:1px solid #F1E3CB;text-align:right"><b>' . htmlspecialchars(setting('time')) . '</b></td></tr>
       <tr><td style="padding:6px 0">Lieu</td><td style="padding:6px 0;text-align:right"><b>' . htmlspecialchars(setting('place')) . '</b></td></tr>
     </table>
-    <p style="font-size:13px;color:#8a7d63">Référence : ' . htmlspecialchars($b['ref']) . '</p>';
-  return brevo_send($b['email'], $b['name'], 'Place confirmée — ' . setting('eventName'), email_layout('C\'est confirmé !', $body));
+    ' . $after . '
+    <p style="font-size:13px;color:#7A6E55">Référence : ' . htmlspecialchars($b['ref']) . '</p>';
+  return brevo_send($b['email'], $b['name'], 'Réservation confirmée — ' . setting('eventName'), email_layout('C\'est confirmé !', $body));
 }
 
 function email_organizer(array $b): void {
@@ -355,8 +482,10 @@ function email_organizer(array $b): void {
   if (!defined('ORGANIZER_EMAIL') || !ORGANIZER_EMAIL) return;
   $body = '<p>Nouvelle réservation (' . ($b['method'] === 'stripe' ? 'carte' : 'virement') . ') :</p>
     <p><b>' . htmlspecialchars($b['name']) . '</b><br>' . htmlspecialchars(($b['email'] ?? '') . ' ' . ($b['phone'] ?? '')) . '</p>
-    <p>' . htmlspecialchars(lines_text($b)) . '<br>Montant : ' . money_cents((int)$b['amount_cents']) . '<br>Réf : ' . htmlspecialchars($b['ref']) . '</p>';
-  brevo_send(ORGANIZER_EMAIL, 'Organisateur', 'Nouvelle réservation — ' . htmlspecialchars($b['name']), email_layout('Nouvelle réservation', $body));
+    ' . lines_html($b) . '
+    <p>Montant : <b>' . money_cents((int)$b['amount_cents']) . '</b><br>Réf : ' . htmlspecialchars($b['ref'])
+    . ($b['notes'] ? '<br>Remarque : ' . htmlspecialchars($b['notes']) : '') . '</p>';
+  brevo_send(ORGANIZER_EMAIL, 'Organisateur', 'Nouvelle réservation — ' . $b['name'], email_layout('Nouvelle réservation', $body));
 }
 
 /* ============================================================
@@ -383,17 +512,17 @@ function stripe_request(string $path, array $params): array {
 function stripe_create_session(array $b): array {
   $items = [];
   $add = function (string $label, int $unit, int $qty) use (&$items) {
-    if ($qty <= 0) return;
-    $i = count($items);
-    $items["line_items[$i][price_data][currency]"]              = CURRENCY;
-    $items["line_items[$i][price_data][product_data][name]"]    = $label;
-    $items["line_items[$i][price_data][unit_amount]"]           = $unit;
-    $items["line_items[$i][quantity]"]                          = $qty;
+    if ($qty <= 0 || $unit <= 0) return;
+    $i = count($items) / 4;
+    $items["line_items[$i][price_data][currency]"]           = CURRENCY;
+    $items["line_items[$i][price_data][product_data][name]"] = $label;
+    $items["line_items[$i][price_data][unit_amount]"]        = $unit;
+    $items["line_items[$i][quantity]"]                       = $qty;
   };
-  $pc = prices_cents();
-  $add('Repas + Soirée DJ',  $pc['dine'],  (int)$b['qty_dine']);
-  $add('Soirée DJ seule',    $pc['party'], (int)$b['qty_party']);
-  $add('Repas à emporter',   $pc['take'],  (int)$b['qty_take']);
+  $suffix = ' (' . mode_label($b['mode'] ?? 'dine') . ')';
+  foreach ($b['items'] ?? [] as $it) {
+    $add($it['name'] . ' — ' . variant_label($it['variant']) . $suffix, (int)$it['unit'], (int)$it['qty']);
+  }
 
   $params = array_merge([
     'mode'                 => 'payment',

@@ -17,15 +17,14 @@ function public_config(): array {
     'date'        => setting('date'),
     'time'        => setting('time'),
     'place'       => setting('place'),
-    'goal'        => (float) setting('goal'),
-    'priceDine'   => (float) setting('priceDine'),
-    'priceParty'  => (float) setting('priceParty'),
-    'priceTake'   => (float) setting('priceTake'),
-    'capDine'     => (int) setting('capDine'),
-    'capKitchen'  => (int) setting('capKitchen'),
-    'capParty'    => (int) setting('capParty'),
-    'iban'        => setting('iban'),
-    'accountName' => setting('accountName'),
+    'goal'         => (float) setting('goal'),
+    'capDine'      => (int) setting('capDine'),
+    'capTake'      => (int) setting('capTake'),
+    'includedText' => setting('includedText', ''),
+    'takeText'     => setting('takeText', ''),
+    'afterText'    => setting('afterText', ''),
+    'iban'         => setting('iban'),
+    'accountName'  => setting('accountName'),
   ];
 }
 
@@ -36,15 +35,10 @@ try {
     case 'state': {
       $c = counts(db());
       $r = raised(db());
-      $k = caps();
       json_out([
         'config'        => public_config(),
+        'menu'          => menu_all(true),
         'remaining'     => remaining($c),
-        'head'          => [
-          'dineRoom' => max(0, $k['capDine'] - $c['d']),
-          'kitchen'  => max(0, $k['capKitchen'] - $c['meals']),
-          'party'    => max(0, $k['capParty'] - ($c['d'] + $c['p'])),
-        ],
         'raisedCents'   => $r['cents'],
         'raisedCount'   => $r['count'],
         'stripeEnabled' => stripe_enabled(),
@@ -62,6 +56,8 @@ try {
         'status' => $b['status'],
         'amount' => money_cents((int)$b['amount_cents']),
         'method' => $b['method'],
+        'mode'   => $b['mode'],
+        'items'  => $b['items'],
       ]);
     }
 
@@ -86,20 +82,21 @@ try {
       $name = trim($in['name'] ?? '');
       $email = trim($in['email'] ?? '');
       $phone = trim($in['phone'] ?? '');
-      $qd = (int)($in['qd'] ?? 0); $qp = (int)($in['qp'] ?? 0); $qt = (int)($in['qt'] ?? 0);
+      $mode  = ($in['mode'] ?? 'dine') === 'take' ? 'take' : 'dine';
+      $items = is_array($in['items'] ?? null) ? $in['items'] : [];
       $method = ($in['method'] ?? 'transfer') === 'stripe' ? 'stripe' : 'transfer';
 
-      if ($name === '')                 json_out(['error' => 'name'], 422);
+      if ($name === '')                   json_out(['error' => 'name'], 422);
       if ($email === '' && $phone === '') json_out(['error' => 'contact'], 422);
-      if ($qd + $qp + $qt <= 0)         json_out(['error' => 'empty'], 422);
+      if (!$items)                        json_out(['error' => 'empty'], 422);
       if ($method === 'stripe' && !stripe_enabled()) $method = 'transfer';
       if ($method === 'stripe' && $email === '') json_out(['error' => 'email_required'], 422);
 
       $b = create_booking([
         'name' => $name, 'email' => $email, 'phone' => $phone,
-        'notes' => $in['notes'] ?? '', 'qd' => $qd, 'qp' => $qp, 'qt' => $qt, 'method' => $method,
+        'notes' => $in['notes'] ?? '', 'mode' => $mode, 'items' => $items, 'method' => $method,
       ]);
-      if (isset($b['error'])) json_out($b, 409);   // 'sold' + remaining
+      if (isset($b['error'])) json_out($b, $b['error'] === 'empty' ? 422 : 409);   // 'sold' + remaining
 
       email_organizer($b);
 
@@ -137,12 +134,16 @@ try {
     case 'admin_state': {
       require_admin();
       $rows = db()->query('SELECT * FROM bookings ORDER BY id DESC')->fetchAll();
+      $items = booking_items_map(array_map(fn($b) => (int)$b['id'], $rows));
+      foreach ($rows as &$row) $row['items'] = $items[(int)$row['id']] ?? [];
+      unset($row);
       $c = counts(db()); $r = raised(db());
       json_out([
         'config'      => public_config(),
+        'menu'        => menu_all(false),
         'caps'        => caps(),
         'remaining'   => remaining($c),
-        'used'        => ['dine' => $c['d'], 'meals' => $c['meals'], 'party' => $c['d'] + $c['p']],
+        'used'        => $c,
         'raisedCents' => $r['cents'],
         'bookings'    => array_map('booking_public', $rows),
       ]);
@@ -161,7 +162,7 @@ try {
       require_admin();
       $in = input_json();
       $allowed = ['eventName','cause','date','time','place','goal',
-                  'priceDine','priceParty','priceTake','capDine','capKitchen','capParty',
+                  'capDine','capTake','includedText','takeText','afterText',
                   'iban','accountName'];
       $kv = [];
       foreach ($allowed as $k) if (array_key_exists($k, $in)) $kv[$k] = $in[$k];
@@ -169,9 +170,19 @@ try {
       json_out(['ok' => true]);
     }
 
+    /* ---------- ADMIN : enregistrer le menu (plats + prix) ---------- */
+    case 'admin_menu': {
+      require_admin();
+      $in = input_json();
+      $dishes = is_array($in['dishes'] ?? null) ? $in['dishes'] : [];
+      menu_save($dishes);
+      json_out(['ok' => true, 'menu' => menu_all(false)]);
+    }
+
     /* ---------- ADMIN : tout effacer ---------- */
     case 'admin_wipe': {
       require_admin();
+      db()->exec('DELETE FROM booking_items');
       db()->exec('DELETE FROM bookings');
       json_out(['ok' => true]);
     }
@@ -192,7 +203,9 @@ function booking_public(array $b): array {
     'email'   => $b['email'],
     'phone'   => $b['phone'],
     'notes'   => $b['notes'],
-    'items'   => ['dine' => (int)$b['qty_dine'], 'party' => (int)$b['qty_party'], 'take' => (int)$b['qty_take']],
+    'mode'    => $b['mode'],
+    'meals'   => (int)$b['qty_dine'] + (int)$b['qty_take'],
+    'items'   => $b['items'] ?? [],
     'amount'  => (int)$b['amount_cents'],
     'status'  => $b['status'],
     'method'  => $b['method'],
