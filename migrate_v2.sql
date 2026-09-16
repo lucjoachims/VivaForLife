@@ -44,6 +44,7 @@ INSERT INTO settings (skey, sval) VALUES
   ('capTake',      '40'),
   ('includedText', 'Apéritif et dessert (panna cotta) offerts avec chaque repas'),
   ('takeText',     'Retrait des repas à emporter sur place, entre 17h30 et 19h00'),
+  ('helpPhone',    '0470 00 00 00'),
   ('afterText',    'Après le repas, la soirée DJ continue jusqu''au bout de la nuit. Elle est en accès libre : pas besoin de réserver, on ne réserve que son repas !')
 ON DUPLICATE KEY UPDATE sval = sval;
 

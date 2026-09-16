@@ -161,7 +161,8 @@
   .two{display:grid; grid-template-columns:1fr 1fr; gap:14px}
   .err{color:var(--red); font-weight:700; font-size:.9rem; margin-top:8px; min-height:0}
 
-  .summary{position:sticky; top:84px; background:var(--navy); color:#fff; border-radius:var(--r); padding:24px}
+  .book-side{position:sticky; top:84px}
+  .summary{background:var(--navy); color:#fff; border-radius:var(--r); padding:24px}
   .summary h3{font-size:1.25rem; margin-bottom:12px; color:var(--gold)}
   .sumrow{display:flex; justify-content:space-between; gap:10px; padding:8px 0; border-bottom:1px dashed rgba(255,255,255,.18); font-size:.95rem}
   .sumrow span:last-child{white-space:nowrap}
@@ -172,6 +173,7 @@
   .summary .btn.ghost{color:#fff; box-shadow:inset 0 0 0 2px rgba(255,255,255,.55)}
   .summary .btn.ghost:hover{background:rgba(255,255,255,.1)}
   .paybtns{display:flex; flex-direction:column; gap:10px; margin-top:16px}
+  .phone-help{margin:14px 0 0; font-size:.92rem; color:#3E4667; background:var(--cream); border:1px dashed #E2C89A; border-radius:14px; padding:12px 16px}
 
   /* résultat */
   .result{padding:32px; text-align:center}
@@ -250,7 +252,7 @@
     .hero-grid,.book-grid,.after-grid{grid-template-columns:1fr}
     .hero-logo{order:-1} .hero-logo img{max-width:260px}
     .steps,.dishes{grid-template-columns:1fr}
-    .summary{position:static}
+    .book-side{position:static}
     .stats{grid-template-columns:1fr 1fr} .gauges,.cfg-grid{grid-template-columns:1fr} .cfg-grid .full{grid-column:auto}
     .prep-list{columns:1}
     .nav{display:none}
@@ -367,6 +369,9 @@
             <div class="qty-table" id="qtyTable"><!-- injecté --></div>
           </div>
 
+        </div>
+
+        <div class="book-side">
           <!-- Étape 3 -->
           <div class="card stepbox">
             <h3><span class="n">3</span> Tes coordonnées</h3>
@@ -390,7 +395,6 @@
             </div>
             <div class="err" id="formErr"></div>
           </div>
-        </div>
 
         <div class="summary">
           <h3>Mon récap</h3>
@@ -401,6 +405,8 @@
             <button class="btn ghost" id="payTransfer">🏦 Réserver et payer par virement</button>
           </div>
           <p class="hint">Par carte : paiement sécurisé (Stripe), réservation confirmée tout de suite.<br>Par virement : tu reçois l'IBAN et une communication structurée par e-mail, confirmée à réception.</p>
+        </div>
+        <p class="phone-help" id="phoneHelp" style="display:none"></p>
         </div>
       </div>
     </div>
@@ -418,6 +424,7 @@
         <h2>La soirée continue 🎧</h2>
         <p id="afterText"></p>
         <p id="placeLine"></p>
+        <p id="phoneHelp2" class="phone-help" style="display:none; margin-top:18px"></p>
       </div>
       <div class="card vfl">
         <img src="VFL_logo.png" alt="Viva for Life">
@@ -488,7 +495,9 @@
             <option value="paid">Payé</option>
             <option value="cancelled">Annulé</option>
           </select>
-          <button class="btn ghost sm" id="csvBtn">⬇ Export CSV</button>
+          <button class="btn ghost sm" id="csvBtn">⬇ CSV complet</button>
+          <button class="btn ghost sm" id="csvDineBtn">🍽️ CSV jour J (sur place)</button>
+          <button class="btn ghost sm" id="csvTakeBtn">🥡 CSV à emporter</button>
         </div>
         <div class="table-scroll">
           <table>
@@ -543,6 +552,7 @@
           <div class="field"><label>Repas à emporter (maximum)</label><input data-cfg="capTake" type="number" min="0"></div>
           <div class="field full"><label>Inclus pour tous (apéritif, dessert…)</label><input data-cfg="includedText"></div>
           <div class="field full"><label>Info retrait à emporter</label><input data-cfg="takeText"></div>
+          <div class="field full"><label>Téléphone pour réserver sans paiement en ligne (vide = mention masquée)</label><input data-cfg="helpPhone" placeholder="04xx xx xx xx"></div>
           <div class="field full"><label>Texte « Et après le repas ? »</label><textarea data-cfg="afterText" rows="2"></textarea></div>
         </div>
         <hr class="sep">
@@ -604,6 +614,8 @@ function applyConfigToDOM(){
   set("afterText", CFG.afterText || "");
   set("placeLine", `📍 ${CFG.place} · ${CFG.date} · ${CFG.time}`);
   document.title = CFG.eventName + " · Réservation du repas";
+  const ph = CFG.helpPhone ? `📞 <b>Pas à l'aise avec le paiement en ligne ?</b> Réserve par téléphone au <a href="tel:${esc(CFG.helpPhone.replace(/\s+/g,""))}"><b>${esc(CFG.helpPhone)}</b></a> et paie sur le compte <b>${esc(CFG.iban)}</b>${CFG.accountName?` (${esc(CFG.accountName)})`:""}.` : "";
+  for(const id of ["phoneHelp","phoneHelp2"]){ const el=document.getElementById(id); if(el){ el.style.display = ph ? "" : "none"; el.innerHTML = ph; } }
   const inc = document.getElementById("includedBox");
   if(CFG.includedText){ inc.style.display="flex"; set("includedText", CFG.includedText); } else inc.style.display="none";
   const pc = document.getElementById("payCard");
@@ -897,7 +909,7 @@ function renderResaTable(){
       <td class="tbtns">
         ${b.status!=="paid"?`<button data-act="paid" data-id="${b.id}">✓ Payé</button>`:''}
         ${b.status==="paid"?`<button data-act="pending" data-id="${b.id}">↩ Non payé</button>`:''}
-        ${b.status!=="cancelled"?`<button data-act="cancelled" data-id="${b.id}">✕ Annuler</button>`:`<button data-act="pending" data-id="${b.id}">↩ Rétablir</button>`}
+        ${b.status!=="cancelled"?`<button data-act="cancelled" data-id="${b.id}">✕ Annuler</button>`:`<button data-act="pending" data-id="${b.id}">↩ Rétablir</button><button data-del2="${b.id}" style="color:var(--red)">🗑 Supprimer</button>`}
       </td>
     </tr>`;
   }).join("") : `<tr><td colspan="8" style="text-align:center; color:var(--muted); padding:30px">Aucune réservation.</td></tr>`;
@@ -964,11 +976,39 @@ async function saveMenu(){
   }
 }
 
+async function deleteBooking(id){
+  const b = (ADMIN.bookings||[]).find(x=>x.id===Number(id));
+  if(!b || !confirm(`Supprimer définitivement la réservation annulée de « ${b.name} » ?`)) return;
+  await api("admin_delete", { method:"POST", body:{ id:Number(id) } });
+  await loadAdmin(); loadState();
+}
+
 async function adminAction(id, status){
   await api("admin_update", { method:"POST", body:{ id:Number(id), status } });
   await loadAdmin(); loadState();
 }
 
+function downloadCSV(name, head, rows){
+  const csv = "\uFEFF"+[head, ...rows].map(r=>r.map(v=>`"${String(v).replace(/"/g,'""')}"`).join(";")).join("\n");
+  const blob = new Blob([csv],{type:"text/csv;charset=utf-8"});
+  const a=document.createElement("a"); a.href=URL.createObjectURL(blob);
+  a.download=name+"_"+(CFG.eventName||"event").replace(/\s+/g,"_")+".csv"; a.click();
+}
+/* Liste pour le jour J : une ligne par réservation (non annulée), 2 colonnes par plat (adulte / enfant) */
+function exportDayCSV(mode){
+  const dishes = (ADMIN.menu||[]).map(d=>d.name);
+  for(const b of ADMIN.bookings||[]) for(const it of (b.items||[])) if(!dishes.includes(it.name)) dishes.push(it.name);
+  const head = ["Nom", "Nb repas", ...dishes.flatMap(n=>[n+" adulte", n+" enfant"]), "Paye", "Telephone", "Remarque"];
+  const rows = (ADMIN.bookings||[])
+    .filter(b=>b.status!=="cancelled" && b.mode===mode)
+    .sort((a,b)=>a.name.localeCompare(b.name,"fr",{sensitivity:"base"}))
+    .map(b=>{
+      const q = {}; for(const it of (b.items||[])) q[it.name+"|"+it.variant] = (q[it.name+"|"+it.variant]||0) + it.qty;
+      return [b.name, b.meals, ...dishes.flatMap(n=>[q[n+"|adult"]||0, q[n+"|child"]||0]),
+              b.status==="paid"?"oui":"NON", b.phone||"", (b.notes||"").replace(/[\n;]/g," ")];
+    });
+  downloadCSV(mode==="take"?"emporter":"jourJ_sur_place", head, rows);
+}
 function exportCSV(){
   const head = ["Reference","Nom","Email","Telephone","Mode","Plats","Nb_repas","Montant_EUR","Statut","Methode","Date","Notes"];
   const sl = {paid:"Paye", pending:"A payer", cancelled:"Annule"};
@@ -1008,12 +1048,14 @@ async function wipeAll(){
 
 /* ===================== ÉVÉNEMENTS ===================== */
 document.addEventListener("click", (e)=>{
-  const t=e.target.closest("button, [data-copy], [data-close], #adminModal");
+  if(e.target.id==="adminModal"){ closeAdmin(); return; }   // clic sur le fond uniquement
+  const t=e.target.closest("button, [data-copy], [data-close]");
   if(!t) return;
   if(t.dataset.step){ const k=t.dataset.step; setQty(k, (cart[k]||0)+parseInt(t.dataset.d,10)); }
   if(t.dataset.copy){ navigator.clipboard?.writeText(t.dataset.copy); t.textContent="copié ✓"; setTimeout(()=>t.textContent="copier",1500); }
   if(t.dataset.act && t.dataset.id){ adminAction(t.dataset.id, t.dataset.act); }
-  if(t.hasAttribute("data-close") || t.id==="adminModal"){ closeAdmin(); }
+  if(t.hasAttribute("data-close")){ closeAdmin(); }
+  if(t.dataset.del2){ deleteBooking(t.dataset.del2); }
   if(t.dataset.tab){
     activeTab=t.dataset.tab;
     document.querySelectorAll(".tabs button").forEach(b=>b.classList.toggle("on", b.dataset.tab===activeTab));
@@ -1045,6 +1087,8 @@ document.getElementById("search").addEventListener("input", renderResaTable);
 document.getElementById("filterStatus").addEventListener("change", renderResaTable);
 document.getElementById("filterMode").addEventListener("change", renderResaTable);
 document.getElementById("csvBtn").addEventListener("click", exportCSV);
+document.getElementById("csvDineBtn").addEventListener("click", ()=>exportDayCSV("dine"));
+document.getElementById("csvTakeBtn").addEventListener("click", ()=>exportDayCSV("take"));
 document.getElementById("saveCfg").addEventListener("click", saveCfg);
 document.getElementById("saveMenu").addEventListener("click", saveMenu);
 document.getElementById("addDish").addEventListener("click", ()=>{ EDIT_MENU.push({id:0, name:"", description:"", emoji:"🍝", priceAdult:14, priceChild:8, active:true}); renderMenuEditor(); });
